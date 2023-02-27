@@ -8,6 +8,8 @@ from helpers.image_utils import *
 import cv2
 from tqdm import tqdm
 import matplotlib.pyplot as plt
+# import matplotlib as mpl
+# mpl.use('TkAgg')
 
 class GradCAM():
     
@@ -32,11 +34,22 @@ class GradCAM():
         # TODO: Define a hook function to get the feature maps from the last         #
         # convolutional layer. Then register the hook to get the feature maps        #
         ##############################################################################
-        def back_hook(module, input, output):
-            gradients = output[0]
+        gradcams = []
+        grads = {}
+        acts = {}
 
-        def for_hook(module, input, output):
-            activation = output
+        # Stores the gradient
+        def back_hook(mod, grad_in, grad_out):
+            grads['val'] = grad_out[0]
+            return None
+
+        # Stores output of ReLU
+        def fwrd_hook(mod, input, output):
+            acts['val'] = output
+            return None
+
+        model.features[-1].expand3x3_activation.register_forward_hook(fwrd_hook)
+        model.features[-1].expand3x3_activation.register_backward_hook(back_hook)
 
         ##############################################################################
         #                             END OF YOUR CODE                               #
@@ -59,16 +72,35 @@ class GradCAM():
             # of the feature maps. Using these weights, compute the Grad-CAM heatmap.     #
             # Use the cv2 for resizing the heatmap if necessary.                          #
             ###############################################################################
-            # out_layer = "features_12_expand3x3"
-            out_layer = "features"
-            model._modules.get(out_layer).register_forward_hook(for_hook)
-            model._modules.get(out_layer).register_backward_hook(back_hook)
+            # below based on ideas from https://github.com/1Konny/gradcam_plus_plus-pytorch/blob/master/gradcam.py
 
-            score = logits[:, class_idx]
+            # get score and send backwards to get hooked activations and gradients
+            score = logits[0, class_idx]
             model.zero_grad()
-            score.backwards()
+            score.backward()
+            gradnts = grads['val']
+            activtns = acts['val']
 
+            # get avg gradient per "pixel" per filter at last layer and reshape it
+            weights = gradnts.view(gradnts.size()[0], gradnts.size()[1], -1)
+            weights = weights.mean(2)
+            weights = weights.view(gradnts.size()[0], gradnts.size()[1], 1, 1)
 
+            # multiply activation of each "pixel" in each kernel by avg weight for that kernel
+            # then sum across kernels to reduce to single depth dimension
+            weighted_act = (weights*activtns)
+            weighted_act = weighted_act.sum(1, keepdim=True)
+
+            # remove negative values with ReLU & upsample to match size of original image
+            map = F.relu(weighted_act)
+            map = F.interpolate(map, size=(x.size()[2], x.size()[3]), mode='bicubic')
+
+            # normalize result
+            with torch.no_grad():
+                map = (map - map.min()).div(map.max() - map.min())
+
+            # clip to match img dimensions
+            heatmap = torch.squeeze(map)
 
             ##############################################################################
             #                             END OF YOUR CODE                               #
