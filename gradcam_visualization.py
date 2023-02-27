@@ -99,8 +99,8 @@ class GradCAM():
             with torch.no_grad():
                 map = (map - map.min()).div(map.max() - map.min())
 
-            # clip to match img dimensions
-            heatmap = torch.squeeze(map)
+            # clip to match img dimensions and turn into numpy array
+            heatmap = torch.squeeze(map).numpy()
 
             ##############################################################################
             #                             END OF YOUR CODE                               #
